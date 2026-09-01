@@ -1,0 +1,466 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Live Map - Jalan Santai Dies Natalis ke-64 Unud</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" />
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --navy:#114084;
+    --navy-dark:#1D546C;
+    --orange:#FF6B00;
+    --bg:#F2F2F2;
+    --card:#FFFFFF;
+    --text:#000000;
+    --muted:#808080;
+    --line:#E6E6E6;
+
+    --r-sheet:20px;
+    --r-modal:20px;
+    --r-btn:12px;
+    --r-fab:14px;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;height:100%;font-family:'Roboto',-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;color:var(--text);background:var(--bg);overflow:hidden;}
+  #map{position:fixed;top:64px;left:0;right:0;bottom:0;z-index:0;}
+  header{
+    position:fixed;top:0;left:0;right:0;height:64px;z-index:1500;
+    background:linear-gradient(180deg,var(--navy),var(--navy-dark));
+    color:#fff;display:flex;align-items:center;justify-content:space-between;
+    padding:0 14px;box-shadow:0 2px 10px rgba(var(--shadow-color),.25);
+  }
+  header .title{display:flex;flex-direction:column;line-height:1.15;min-width:0;}
+  header .title strong{font-size:15px;font-weight:700;letter-spacing:.1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  header .title span{font-size:11px;color:#b9c6dd;}
+  header .badge{
+    font-size:10.5px;background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.25);
+    padding:4px 9px;border-radius:100px;display:flex;align-items:center;gap:5px;flex-shrink:0;margin-left:8px;
+  }
+  header .badge .dot{width:6px;height:6px;border-radius:50%;background:#8fa0bf;}
+  header .badge.live .dot{background:#33d17a;animation:pulse-dot 1.6s infinite;}
+  @keyframes pulse-dot{
+    0%{box-shadow:0 0 0 0 rgba(51,209,122,.55);}
+    70%{box-shadow:0 0 0 7px rgba(51,209,122,0);}
+    100%{box-shadow:0 0 0 0 rgba(51,209,122,0);}
+  }
+
+  .fab-col{position:fixed;right:12px;top:76px;z-index:1500;display:flex;flex-direction:column;gap:10px;}
+  .fab{
+    width:42px;height:42px;border-radius:var(--r-fab);background:var(--card);border:1px solid var(--line);
+    box-shadow:0 4px 14px rgba(var(--shadow-color),.16);display:flex;align-items:center;justify-content:center;
+    cursor:pointer;color:var(--navy);
+  }
+  .fab:active{transform:scale(.94);}
+
+  .sheet{
+    position:fixed;left:0;right:0;bottom:0;z-index:1500;
+    background:var(--card);border-radius:var(--r-sheet) var(--r-sheet) 0 0;
+    box-shadow:0 -8px 28px rgba(var(--shadow-color),.18);
+    padding:12px 16px calc(14px + env(safe-area-inset-bottom));
+  }
+  .sheet .grabber{width:36px;height:4px;background:var(--line);border-radius:3px;margin:0 auto 10px;}
+  .status-row{display:flex;align-items:center;gap:10px;margin-bottom:10px;}
+  .status-icon{
+    width:34px;height:34px;border-radius:10px;background:#fff3e8;color:var(--orange);
+    display:flex;align-items:center;justify-content:center;flex-shrink:0;
+  }
+  .status-icon.off-route{background:#f0f0f0;color:var(--muted);}
+  .status-text{flex:1;min-width:0;}
+  .status-text .to{font-size:11.5px;font-weight:500;color:var(--muted);}
+  .status-text .name{font-size:15px;font-weight:700;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .status-dist{font-size:14px;font-weight:700;color:var(--navy);white-space:nowrap;}
+  .status-dist.off-route{color:var(--muted);font-size:12px;}
+
+  .progress-track{height:6px;border-radius:4px;background:var(--line);margin-bottom:14px;overflow:hidden;}
+  .progress-fill{height:100%;background:var(--orange);border-radius:4px;width:0%;transition:width .5s ease;}
+
+  .actions{display:flex;gap:8px;}
+  .btn{
+    flex:1;border:none;border-radius:var(--r-btn);padding:11px 8px;font-size:13.5px;font-weight:700;
+    display:flex;align-items:center;justify-content:center;gap:7px;cursor:pointer;
+  }
+  .btn .btn-icon{display:flex;flex-shrink:0;}
+  .btn.primary{background:var(--navy);color:#fff;}
+  .btn.primary.active{background:#1f9d55;}
+  .btn.ghost{background:#eef1f6;color:var(--navy);}
+  .btn:active{transform:scale(.97);}
+
+  .modal-back{position:fixed;inset:0;background:rgba(12,22,44,.55);z-index:2000;display:none;align-items:center;justify-content:center;padding:24px;}
+
+  @media (orientation:landscape) and (max-height:500px){
+    header{height:44px;padding:0 12px;}
+    header .title strong{font-size:13px;}
+    header .title span{display:none;}
+    header .badge{font-size:9.5px;padding:3px 7px;}
+    #map{top:44px;}
+    .fab-col{top:52px;gap:8px;}
+    .fab{width:36px;height:36px;}
+    .sheet{padding:6px 14px calc(6px + env(safe-area-inset-bottom));}
+    .sheet .grabber{margin-bottom:5px;}
+    .status-row{margin-bottom:5px;gap:8px;}
+    .status-icon{width:26px;height:26px;border-radius:8px;}
+    .status-text .to{font-size:10px;}
+    .status-text .name{font-size:12.5px;}
+    .status-dist{font-size:12px;}
+    .progress-track{margin-bottom:8px;height:4px;}
+    .btn{padding:7px 8px;font-size:12px;}
+  }
+
+  .modal-back.show{display:flex;}
+  .modal{background:#fff;border-radius:var(--r-modal);max-width:340px;width:100%;padding:20px;max-height:80vh;overflow:auto;position:relative;}
+  .modal h3{margin:0 0 4px;font-size:17px;color:var(--navy);padding-right:24px;}
+  .modal p.sub{margin:0 0 14px;font-size:12.5px;color:var(--muted);}
+  .modal .close{
+    position:absolute;top:12px;right:12px;width:28px;height:28px;background:none;border:none;
+    color:var(--muted);cursor:pointer;display:flex;align-items:center;justify-content:center;border-radius:50%;
+  }
+  .modal .close:active{background:var(--bg);}
+  #qrcode{display:flex;justify-content:center;margin:6px 0 14px;}
+  .url-box{background:var(--bg);border-radius:10px;padding:8px 10px;font-size:11.5px;color:var(--muted);word-break:break-all;margin-bottom:10px;}
+  .share-actions{display:flex;gap:8px;}
+  .copy-btn{flex:1;padding:10px;border:none;border-radius:10px;background:var(--navy);color:#fff;font-weight:700;font-size:13.5px;cursor:pointer;}
+  .copy-btn.copied{background:#1f9d55;}
+  .copy-btn.secondary{background:#eef1f6;color:var(--navy);}
+  .copy-btn.secondary.done{background:#dcecff;}
+  .copy-btn:active{transform:scale(.97);}
+
+  .route-list{list-style:none;margin:0;padding:0;}
+  .route-list li{display:flex;gap:10px;align-items:flex-start;padding:9px 0;border-bottom:1px solid var(--line);font-size:13.5px;font-weight:500;}
+  .route-list li:last-child{border-bottom:none;}
+  .route-list .num{
+    width:22px;height:22px;border-radius:50%;background:var(--navy);color:#fff;font-size:11px;font-weight:700;
+    display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:1px;
+  }
+  .route-list .flag{background:var(--orange);}
+  .route-meta{display:flex;gap:14px;margin-top:12px;padding-top:12px;border-top:1px solid var(--line);}
+  .route-meta div{flex:1;}
+  .route-meta .v{font-size:16px;font-weight:700;color:var(--navy);}
+  .route-meta .l{font-size:11px;font-weight:500;color:var(--muted);}
+
+  .toast{
+    position:fixed;left:50%;bottom:150px;transform:translateX(-50%);z-index:2100;
+    background:#1b2430;color:#fff;padding:9px 16px;border-radius:100px;font-size:12.5px;font-weight:500;
+    opacity:0;pointer-events:none;transition:opacity .25s ease;white-space:nowrap;
+  }
+  .toast.show{opacity:1;}
+
+  .num-pin{width:26px;height:26px;border-radius:50%;background:var(--navy);border:2px solid #fff;box-shadow:0 2px 6px rgba(var(--shadow-color),.35);color:#fff;font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center;}
+  .flag-pin{width:30px;height:30px;border-radius:50%;background:var(--orange);border:2px solid #fff;box-shadow:0 2px 6px rgba(var(--shadow-color),.35);display:flex;align-items:center;justify-content:center;}
+  .me-pin{width:18px;height:18px;border-radius:50%;background:#1f7ae0;border:3px solid #fff;box-shadow:0 0 0 4px rgba(31,122,224,.3);}
+
+  .leaflet-control-attribution{font-size:9px !important;}
+  .leaflet-bottom.leaflet-right{margin-bottom:190px;}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="title">
+    <strong>Jalan Santai Dies Natalis ke-64</strong>
+    <span>Universitas Udayana · Senin, 28 Sep 2026</span>
+  </div>
+  <div class="badge" id="liveBadge"><span class="dot"></span><span id="liveBadgeText">Lokasi nonaktif</span></div>
+</header>
+
+<div id="map"></div>
+
+<div class="fab-col">
+  <div class="fab" id="recenterBtn" title="Pusatkan ke lokasi saya"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="6.5"/><circle cx="12" cy="12" r="1.5" fill="currentColor" stroke="none"/><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3"/></svg></div>
+  <div class="fab" id="infoBtn" title="Info rute"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.5"/><line x1="12" y1="11" x2="12" y2="16.5"/><circle cx="12" cy="7.4" r="1.1" fill="currentColor" stroke="none"/></svg></div>
+</div>
+
+<div class="sheet">
+  <div class="grabber"></div>
+  <div class="status-row">
+    <div class="status-icon" id="statusIcon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21s7-7.58 7-12A7 7 0 0 0 5 9c0 4.42 7 12 7 12z"/><circle cx="12" cy="9" r="2.4"/></svg></div>
+    <div class="status-text">
+      <div class="to" id="statusTo">Checkpoint berikutnya</div>
+      <div class="name" id="statusName">Aktifkan lokasi untuk mulai</div>
+    </div>
+    <div class="status-dist" id="statusDist">–</div>
+  </div>
+  <div class="progress-track"><div class="progress-fill" id="progressFill"></div></div>
+  <div class="actions">
+    <button class="btn primary" id="trackBtn"><span class="btn-icon" id="trackIcon"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21s7-7.58 7-12A7 7 0 0 0 5 9c0 4.42 7 12 7 12z"/><circle cx="12" cy="9" r="2.4"/></svg></span><span id="trackLabel">Lacak Lokasi</span></button>
+    <button class="btn ghost" id="shareBtn"><span class="btn-icon"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="5" r="2.6"/><circle cx="6" cy="12" r="2.6"/><circle cx="18" cy="19" r="2.6"/><line x1="8.3" y1="10.7" x2="15.7" y2="6.4"/><line x1="8.3" y1="13.3" x2="15.7" y2="17.6"/></svg></span><span>Bagikan</span></button>
+  </div>
+</div>
+
+<div class="modal-back" id="infoModal">
+  <div class="modal">
+    <button class="close" id="closeInfo" aria-label="Tutup"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/></svg></button>
+    <h3>Alur Rute</h3>
+    <p class="sub">Mengelilingi Kampus Bukit Jimbaran, mulai &amp; berakhir di Lapangan Rektorat.</p>
+    <ul class="route-list" id="routeList"></ul>
+    <div class="route-meta">
+      <div><div class="v" id="metaDistance">–</div><div class="l">Jarak rute</div></div>
+      <div><div class="v">±25 menit</div><div class="l">Waktu tempuh</div></div>
+    </div>
+  </div>
+</div>
+
+<div class="modal-back" id="shareModal">
+  <div class="modal">
+    <button class="close" id="closeShare" aria-label="Tutup"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/></svg></button>
+    <h3>Bagikan ke Peserta</h3>
+    <p class="sub">Peserta yang scan kode ini akan membuka peta ini dan bisa mengaktifkan lokasi mereka masing-masing.</p>
+    <div id="qrcode"></div>
+    <div class="url-box" id="urlBox"></div>
+    <div class="share-actions">
+      <button class="copy-btn secondary" id="downloadBtn">Unduh QR</button>
+      <button class="copy-btn" id="copyBtn">Salin Link</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<script>
+
+const FLAG_PIN_SVG = '<svg width="16" height="16" viewBox="0 0 24 24"><line x1="6" y1="3" x2="6" y2="21" stroke="#fff" stroke-width="2.2" stroke-linecap="round"/><path d="M6 4.5 L18 4.5 L15 8 L18 11.5 L6 11.5 Z" fill="#fff"/><rect x="8" y="5.3" width="2" height="2" fill="#114084"/><rect x="12.2" y="5.3" width="2" height="2" fill="#114084"/><rect x="10.1" y="7.6" width="2" height="2" fill="#114084"/><rect x="14.3" y="9" width="2" height="1.6" fill="#114084"/></svg>';
+const FLAG_LIST_SVG = '<svg width="11" height="11" viewBox="0 0 24 24"><line x1="6" y1="3" x2="6" y2="21" stroke="#fff" stroke-width="2.6" stroke-linecap="round"/><path d="M6 4.5 L18 4.5 L15 8 L18 11.5 L6 11.5 Z" fill="#fff"/></svg>';
+
+let checkpoints = [];
+let path = [];
+let pathCum = [];
+let checkpointCum = [];
+let totalPathDist = 0;
+let map;
+
+const OFF_ROUTE_THRESHOLD_M = 80;
+const MAX_STEP_ADVANCE_M = 60;
+let farthestCum = 0;
+
+function toRad(d){return d*Math.PI/180;}
+function haversine(lat1,lon1,lat2,lon2){
+  const R=6371000;
+  const dLat=toRad(lat2-lat1), dLon=toRad(lon2-lon1);
+  const a=Math.sin(dLat/2)**2 + Math.cos(toRad(lat1))*Math.cos(toRad(lat2))*Math.sin(dLon/2)**2;
+  return R*2*Math.atan2(Math.sqrt(a),Math.sqrt(1-a));
+}
+
+function computePathMetrics(){
+  pathCum = [0];
+  for(let i=1;i<path.length;i++){
+    pathCum.push(pathCum[i-1] + haversine(path[i-1].lat, path[i-1].lng, path[i].lat, path[i].lng));
+  }
+  totalPathDist = pathCum.length ? pathCum[pathCum.length-1] : 0;
+
+  checkpointCum = checkpoints.map(cp=>{
+    let bestIdx=0, bestD=Infinity;
+    path.forEach((p,i)=>{
+      const d=haversine(cp.lat,cp.lng,p.lat,p.lng);
+      if(d<bestD){bestD=d;bestIdx=i;}
+    });
+    return pathCum[bestIdx];
+  });
+}
+
+function nearestPathInfo(lat,lng){
+  let bestIdx=0, bestD=Infinity;
+  path.forEach((p,i)=>{
+    const d=haversine(lat,lng,p.lat,p.lng);
+    if(d<bestD){bestD=d;bestIdx=i;}
+  });
+  return {cum: pathCum[bestIdx], dist: bestD};
+}
+
+let userMarker=null, userAccuracy=null, watchId=null, tracking=false, autoFollow=true;
+const meIcon = L.divIcon({html:'<div class="me-pin"></div>', className:'', iconSize:[18,18], iconAnchor:[9,9]});
+
+function updateStatus(lat,lng){
+  if(!path.length || !checkpoints.length) return;
+  const {cum: rawCum, dist: offRouteDist} = nearestPathInfo(lat,lng);
+  const onRoute = offRouteDist <= OFF_ROUTE_THRESHOLD_M;
+
+  if(onRoute){
+    const cappedCum = Math.min(rawCum, farthestCum + MAX_STEP_ADVANCE_M);
+    farthestCum = Math.max(farthestCum, cappedCum);
+  }
+
+  const userCum = farthestCum;
+
+  let nextIdx = checkpointCum.findIndex(c => c > userCum + 1);
+  const finished = nextIdx === -1;
+  const next = finished ? checkpoints[checkpoints.length-1] : checkpoints[nextIdx];
+  const dToNext = finished ? 0 : Math.max(0, checkpointCum[nextIdx] - userCum);
+
+  const statusIcon = document.getElementById('statusIcon');
+  const statusTo = document.getElementById('statusTo');
+  const statusDist = document.getElementById('statusDist');
+
+  if(statusIcon) statusIcon.classList.toggle('off-route', !onRoute);
+  if(statusDist) statusDist.classList.toggle('off-route', !onRoute);
+
+  if(!onRoute){
+    statusTo.textContent = 'Anda di luar jalur rute';
+    document.getElementById('statusName').textContent = next.name;
+    statusDist.textContent = (offRouteDist<1000 ? Math.round(offRouteDist)+' m dari jalur' : (offRouteDist/1000).toFixed(1)+' km dari jalur');
+  } else {
+    statusTo.textContent = finished ? 'Selamat!' : 'Menuju checkpoint berikutnya';
+    document.getElementById('statusName').textContent = finished ? 'Anda sudah di garis finish' : next.name;
+    statusDist.textContent = finished ? '🎉' : (dToNext<1000 ? Math.round(dToNext)+' m' : (dToNext/1000).toFixed(1)+' km');
+  }
+  document.getElementById('progressFill').style.width = Math.min(100, totalPathDist ? (userCum/totalPathDist*100) : 0)+'%';
+}
+
+function startTracking(){
+  if(!navigator.geolocation){ showToast('Perangkat tidak mendukung GPS'); return; }
+  if(!path.length || !checkpoints.length){ showToast('Rute belum selesai dimuat, coba lagi sesaat lagi'); return; }
+  watchId = navigator.geolocation.watchPosition(pos=>{
+    const {latitude, longitude, accuracy} = pos.coords;
+    if(!userMarker){
+      userMarker = L.marker([latitude,longitude], {icon:meIcon, zIndexOffset:1000}).addTo(map);
+      userAccuracy = L.circle([latitude,longitude], {radius:accuracy, color:'#1f7ae0', fillColor:'#1f7ae0', fillOpacity:.12, weight:1}).addTo(map);
+    } else {
+      userMarker.setLatLng([latitude,longitude]);
+      userAccuracy.setLatLng([latitude,longitude]);
+      userAccuracy.setRadius(accuracy);
+    }
+    if(autoFollow) map.panTo([latitude,longitude]);
+    updateStatus(latitude,longitude);
+  }, err=>{
+    showToast(err.code===1 ? 'Izin lokasi ditolak' : 'Gagal mengambil lokasi');
+  }, {enableHighAccuracy:true, maximumAge:1500, timeout:12000});
+
+  tracking = true;
+  document.getElementById('trackBtn').classList.add('active');
+  document.getElementById('trackIcon').innerHTML = '<svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><rect x="5" y="5" width="14" height="14" rx="3"/></svg>';
+  document.getElementById('trackLabel').textContent = 'Berhenti Lacak';
+  document.getElementById('liveBadge').classList.add('live');
+  document.getElementById('liveBadgeText').textContent = 'Lokasi aktif';
+}
+
+function stopTracking(){
+  if(watchId!==null) navigator.geolocation.clearWatch(watchId);
+  tracking=false;
+  document.getElementById('trackBtn').classList.remove('active');
+  document.getElementById('trackIcon').innerHTML = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21s7-7.58 7-12A7 7 0 0 0 5 9c0 4.42 7 12 7 12z"/><circle cx="12" cy="9" r="2.4"/></svg>';
+  document.getElementById('trackLabel').textContent = 'Lacak Lokasi';
+  document.getElementById('liveBadge').classList.remove('live');
+  document.getElementById('liveBadgeText').textContent = 'Lokasi nonaktif';
+}
+
+function showToast(msg){
+  const t=document.getElementById('toast');
+  t.textContent=msg; t.classList.add('show');
+  setTimeout(()=>t.classList.remove('show'), 2600);
+}
+
+function initMap(){
+  map = L.map('map', {zoomControl:false, attributionControl:true}).setView([checkpoints[0].lat, checkpoints[0].lng], 16);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom:19, attribution:'&copy; OpenStreetMap contributors'
+  }).addTo(map);
+  L.control.zoom({position:'topleft'}).addTo(map);
+
+  const latlngs = path.map(p=>[p.lat,p.lng]);
+  const basePoly = L.polyline(latlngs, {color:'#114084', weight:5, opacity:.95, lineJoin:'round'}).addTo(map);
+  map.fitBounds(basePoly.getBounds(), {padding:[40,40]});
+
+  const directionPoly = L.polyline(latlngs, {color:'#FF6B00', weight:5, opacity:.95, lineJoin:'round'}).addTo(map);
+  setTimeout(()=>{
+    const el = directionPoly.getElement();
+    if(el){
+      el.style.strokeDasharray = '1 14';
+      el.style.strokeLinecap='round';
+      el.classList.add('flow-line');
+      const style=document.createElement('style');
+      style.textContent = '.flow-line{animation:dashmove 1s linear infinite;} @keyframes dashmove{to{stroke-dashoffset:-30;}}';
+      document.head.appendChild(style);
+    }
+  },300);
+
+  checkpoints.forEach((p,i)=>{
+    const isEdge = p.flag;
+    const html = isEdge ? `<div class="flag-pin">${FLAG_PIN_SVG}</div>` : `<div class="num-pin">${i}</div>`;
+    const icon = L.divIcon({html, className:'', iconSize:isEdge?[30,30]:[26,26], iconAnchor:isEdge?[15,15]:[13,13]});
+    L.marker([p.lat,p.lng], {icon}).addTo(map).bindPopup(`<b>${p.name}</b>`);
+  });
+
+  document.getElementById('metaDistance').textContent = (totalPathDist/1000).toFixed(1)+' km';
+  const listEl = document.getElementById('routeList');
+  checkpoints.forEach((p,i)=>{
+    const li = document.createElement('li');
+    li.innerHTML = `<span class="num ${p.flag?'flag':''}">${p.flag?FLAG_LIST_SVG:i}</span><span>${p.name}</span>`;
+    listEl.appendChild(li);
+  });
+
+  document.getElementById('recenterBtn').addEventListener('click', ()=>{
+    autoFollow = true;
+    if(userMarker) map.panTo(userMarker.getLatLng());
+    else showToast('Aktifkan lokasi dulu');
+  });
+
+  map.on('dragstart', ()=>{ autoFollow=false; });
+}
+
+async function loadRoute(){
+  try{
+    const res = await fetch('route.json', {cache: 'no-store'});
+    if(!res.ok) throw new Error('HTTP '+res.status);
+    const data = await res.json();
+    checkpoints = data.checkpoints || [];
+    path = data.path || [];
+  }catch(err){
+    console.error('Gagal memuat route.json', err);
+    showToast('Gagal memuat data rute');
+    return;
+  }
+  computePathMetrics();
+  initMap();
+}
+
+document.getElementById('trackBtn').addEventListener('click', ()=>{ tracking ? stopTracking() : startTracking(); });
+
+document.getElementById('infoBtn').addEventListener('click', ()=> document.getElementById('infoModal').classList.add('show'));
+document.getElementById('closeInfo').addEventListener('click', ()=> document.getElementById('infoModal').classList.remove('show'));
+
+const shareModal = document.getElementById('shareModal');
+document.getElementById('shareBtn').addEventListener('click', ()=>{
+  shareModal.classList.add('show');
+  document.getElementById('urlBox').textContent = window.location.href;
+  const qrHolder = document.getElementById('qrcode');
+  qrHolder.innerHTML='';
+  new QRCode(qrHolder, {text:window.location.href, width:168, height:168, colorDark:'#114084', colorLight:'#ffffff', correctLevel:QRCode.CorrectLevel.H});
+});
+document.getElementById('closeShare').addEventListener('click', ()=> shareModal.classList.remove('show'));
+
+document.getElementById('downloadBtn').addEventListener('click', ()=>{
+  const canvas = document.querySelector('#qrcode canvas');
+  if(!canvas){ showToast('QR belum siap, coba lagi.'); return; }
+  const link = document.createElement('a');
+  link.download = 'qr-jalan-santai-unud.png';
+  link.href = canvas.toDataURL('image/png');
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  const btn = document.getElementById('downloadBtn');
+  const orig = btn.textContent;
+  btn.textContent = 'Terunduh!';
+  btn.classList.add('done');
+  setTimeout(()=>{ btn.textContent = orig; btn.classList.remove('done'); }, 1600);
+});
+
+document.getElementById('copyBtn').addEventListener('click', ()=>{
+  navigator.clipboard.writeText(window.location.href).then(()=>{
+    const btn=document.getElementById('copyBtn');
+    btn.textContent='Tersalin!'; btn.classList.add('copied');
+    setTimeout(()=>{btn.textContent='Salin Link'; btn.classList.remove('copied');},1600);
+  });
+});
+
+document.querySelectorAll('.modal-back').forEach(m=>{
+  m.addEventListener('click', e=>{ if(e.target===m) m.classList.remove('show'); });
+});
+
+loadRoute();
+</script>
+</body>
+</html>
