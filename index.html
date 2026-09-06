@@ -236,6 +236,7 @@ let map;
 const OFF_ROUTE_THRESHOLD_M = 80;
 const MAX_STEP_ADVANCE_M = 60;
 let farthestCum = 0;
+let currentCheckpointIdx = 1;
 
 function toRad(d){return d*Math.PI/180;}
 function haversine(lat1,lon1,lat2,lon2){
@@ -262,12 +263,31 @@ function computePathMetrics(){
   });
 }
 
-function nearestPathInfo(lat,lng){
+function nearestPathInfo(lat,lng, currentCum){
   let bestIdx=0, bestD=Infinity;
+  let candidates = [];
   path.forEach((p,i)=>{
     const d=haversine(lat,lng,p.lat,p.lng);
+    candidates.push({cum: pathCum[i], dist: d});
     if(d<bestD){bestD=d;bestIdx=i;}
   });
+
+  if (bestD <= OFF_ROUTE_THRESHOLD_M) {
+    let bestCum = pathCum[bestIdx];
+    let minDiff = Infinity;
+    for (let c of candidates) {
+      if (c.dist <= OFF_ROUTE_THRESHOLD_M) {
+        let diff = Math.abs(c.cum - currentCum);
+        if (diff < minDiff) {
+          minDiff = diff;
+          bestCum = c.cum;
+          bestD = c.dist;
+        }
+      }
+    }
+    return {cum: bestCum, dist: bestD};
+  }
+
   return {cum: pathCum[bestIdx], dist: bestD};
 }
 
@@ -276,20 +296,33 @@ const meIcon = L.divIcon({html:'<div class="me-pin"></div>', className:'', iconS
 
 function updateStatus(lat,lng){
   if(!path.length || !checkpoints.length) return;
-  const {cum: rawCum, dist: offRouteDist} = nearestPathInfo(lat,lng);
+  const {cum: rawCum, dist: offRouteDist} = nearestPathInfo(lat,lng, farthestCum);
   const onRoute = offRouteDist <= OFF_ROUTE_THRESHOLD_M;
 
+  if (currentCheckpointIdx < checkpoints.length) {
+    const cp = checkpoints[currentCheckpointIdx];
+    const distToCp = haversine(lat, lng, cp.lat, cp.lng);
+    if (distToCp <= OFF_ROUTE_THRESHOLD_M) {
+      currentCheckpointIdx++;
+    }
+  }
+
   if(onRoute){
-    const cappedCum = Math.min(rawCum, farthestCum + MAX_STEP_ADVANCE_M);
+    let maxAllowed = totalPathDist;
+    if (currentCheckpointIdx < checkpoints.length) {
+      maxAllowed = checkpointCum[currentCheckpointIdx];
+    }
+    const cappedRawCum = Math.min(rawCum, maxAllowed);
+    const cappedCum = Math.min(cappedRawCum, farthestCum + MAX_STEP_ADVANCE_M);
     farthestCum = Math.max(farthestCum, cappedCum);
   }
 
   const userCum = farthestCum;
 
-  let nextIdx = checkpointCum.findIndex(c => c > userCum + 1);
+  let nextIdx = currentCheckpointIdx < checkpoints.length ? currentCheckpointIdx : -1;
   const finished = nextIdx === -1;
   const next = finished ? checkpoints[checkpoints.length-1] : checkpoints[nextIdx];
-  const dToNext = finished ? 0 : Math.max(0, checkpointCum[nextIdx] - userCum);
+  const dToNext = finished ? 0 : Math.max(haversine(lat, lng, next.lat, next.lng), checkpointCum[nextIdx] - userCum);
 
   const statusIcon = document.getElementById('statusIcon');
   const statusTo = document.getElementById('statusTo');
