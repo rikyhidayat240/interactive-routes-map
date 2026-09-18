@@ -153,8 +153,9 @@
   }
   .toast.show{opacity:1;}
 
-  .num-pin{width:26px;height:26px;border-radius:50%;background:var(--navy);border:2px solid #fff;box-shadow:0 2px 6px rgba(var(--shadow-color),.35);color:#fff;font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center;}
-  .flag-pin{width:30px;height:30px;border-radius:50%;background:var(--orange);border:2px solid #fff;box-shadow:0 2px 6px rgba(var(--shadow-color),.35);display:flex;align-items:center;justify-content:center;}
+  /* BUGFIX: was --shadow-color (undefined), corrected to --shadow-rgb */
+  .num-pin{width:26px;height:26px;border-radius:50%;background:var(--navy);border:2px solid #fff;box-shadow:0 2px 6px rgba(var(--shadow-rgb),.35);color:#fff;font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center;}
+  .flag-pin{width:30px;height:30px;border-radius:50%;background:var(--orange);border:2px solid #fff;box-shadow:0 2px 6px rgba(var(--shadow-rgb),.35);display:flex;align-items:center;justify-content:center;}
   .me-pin{width:18px;height:18px;border-radius:50%;background:#1f7ae0;border:3px solid #fff;box-shadow:0 0 0 4px rgba(31,122,224,.3);}
 
   .leaflet-control-attribution{font-size:9px !important;}
@@ -234,141 +235,218 @@
 const FLAG_PIN_SVG = '<svg width="16" height="16" viewBox="0 0 24 24"><line x1="6" y1="3" x2="6" y2="21" stroke="#fff" stroke-width="2.2" stroke-linecap="round"/><path d="M6 4.5 L18 4.5 L15 8 L18 11.5 L6 11.5 Z" fill="#fff"/><rect x="8" y="5.3" width="2" height="2" fill="#114084"/><rect x="12.2" y="5.3" width="2" height="2" fill="#114084"/><rect x="10.1" y="7.6" width="2" height="2" fill="#114084"/><rect x="14.3" y="9" width="2" height="1.6" fill="#114084"/></svg>';
 const FLAG_LIST_SVG = '<svg width="11" height="11" viewBox="0 0 24 24"><line x1="6" y1="3" x2="6" y2="21" stroke="#fff" stroke-width="2.6" stroke-linecap="round"/><path d="M6 4.5 L18 4.5 L15 8 L18 11.5 L6 11.5 Z" fill="#fff"/></svg>';
 
+// ─── Data & Metrics ───────────────────────────────────────────────────────────
 let checkpoints = [];
 let path = [];
-let pathCum = [];
-let checkpointCum = [];
+let pathCum = [];       // Cumulative distance at each path point
+let checkpointCum = []; // Cumulative distance mapped to each checkpoint
 let totalPathDist = 0;
-let map;
+let map, canvasRenderer;
 
-const OFF_ROUTE_THRESHOLD_M = 80;
-const MAX_STEP_ADVANCE_M = 60;
+// ─── Route Constants ──────────────────────────────────────────────────────────
+const OFF_ROUTE_THRESHOLD_M = 80;  // Max distance from path to be "on route"
+const CHECKPOINT_REACH_M    = 60;  // Radius to "reach" a checkpoint
+const MAX_STEP_ADVANCE_M    = 80;  // Max forward progress per GPS update (anti-jump)
+
+// ─── Tracking State ───────────────────────────────────────────────────────────
+// currentCheckpointIdx: index in checkpoints[] of the NEXT checkpoint to reach.
+// Starts at 1 because index 0 (Start/flag) is automatically passed at departure.
+// Sequential rule: idx only increments when physically near checkpoints[idx] AND on route.
+// To finish, user must physically visit all checkpoints including idx=5 (POS 5) then idx=6 (Finish).
 let farthestCum = 0;
 let currentCheckpointIdx = 1;
+let lastStatusTime = 0;
+const STATUS_THROTTLE_MS = 1200; // Compute status at most once per 1.2s (saves CPU on mobile)
 
-function toRad(d){return d*Math.PI/180;}
-function haversine(lat1,lon1,lat2,lon2){
-  const R=6371000;
-  const dLat=toRad(lat2-lat1), dLon=toRad(lon2-lon1);
-  const a=Math.sin(dLat/2)**2 + Math.cos(toRad(lat1))*Math.cos(toRad(lat2))*Math.sin(dLon/2)**2;
-  return R*2*Math.atan2(Math.sqrt(a),Math.sqrt(1-a));
+let userMarker = null, userAccuracy = null;
+let watchId = null, tracking = false, autoFollow = true;
+let meIcon = null;
+
+// ─── Math Helpers ─────────────────────────────────────────────────────────────
+function toRad(d) { return d * Math.PI / 180; }
+
+function haversine(lat1, lon1, lat2, lon2) {
+  const R = 6371000;
+  const dLat = toRad(lat2 - lat1), dLon = toRad(lon2 - lon1);
+  const a = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
-function computePathMetrics(){
+// ─── Path Metrics ─────────────────────────────────────────────────────────────
+function computePathMetrics() {
   pathCum = [0];
-  for(let i=1;i<path.length;i++){
-    pathCum.push(pathCum[i-1] + haversine(path[i-1].lat, path[i-1].lng, path[i].lat, path[i].lng));
+  for (let i = 1; i < path.length; i++) {
+    pathCum.push(pathCum[i - 1] + haversine(path[i - 1].lat, path[i - 1].lng, path[i].lat, path[i].lng));
   }
-  totalPathDist = pathCum.length ? pathCum[pathCum.length-1] : 0;
+  totalPathDist = pathCum.length ? pathCum[pathCum.length - 1] : 0;
 
-  checkpointCum = checkpoints.map(cp=>{
-    let bestIdx=0, bestD=Infinity;
-    path.forEach((p,i)=>{
-      const d=haversine(cp.lat,cp.lng,p.lat,p.lng);
-      if(d<bestD){bestD=d;bestIdx=i;}
-    });
+  // Map each checkpoint to the nearest path point's cumulative distance
+  checkpointCum = checkpoints.map(cp => {
+    let bestIdx = 0, bestD = Infinity;
+    for (let i = 0; i < path.length; i++) {
+      const d = haversine(cp.lat, cp.lng, path[i].lat, path[i].lng);
+      if (d < bestD) { bestD = d; bestIdx = i; }
+    }
     return pathCum[bestIdx];
   });
 }
 
-function nearestPathInfo(lat,lng, currentCum){
-  let bestIdx=0, bestD=Infinity;
-  let candidates = [];
-  path.forEach((p,i)=>{
-    const d=haversine(lat,lng,p.lat,p.lng);
-    candidates.push({cum: pathCum[i], dist: d});
-    if(d<bestD){bestD=d;bestIdx=i;}
-  });
+// ─── Nearest Path Point (forward-biased) ─────────────────────────────────────
+// Returns { cum, dist } where:
+//   dist = physical distance from user to nearest path point (for off-route detection)
+//   cum  = best cumulative distance estimate, biased toward forward movement
+//
+// BUGFIX vs original: original used Math.abs(c.cum - currentCum) which could equally
+// prefer backward points, allowing progress to "reset". Now we penalize backward
+// movement 3× so GPS jitter doesn't cause regression.
+function nearestPathInfo(lat, lng) {
+  let nearestIdx = 0, nearestD = Infinity;
 
-  if (bestD <= OFF_ROUTE_THRESHOLD_M) {
-    let bestCum = pathCum[bestIdx];
-    let minDiff = Infinity;
-    for (let c of candidates) {
-      if (c.dist <= OFF_ROUTE_THRESHOLD_M) {
-        let diff = Math.abs(c.cum - currentCum);
-        if (diff < minDiff) {
-          minDiff = diff;
-          bestCum = c.cum;
-          bestD = c.dist;
-        }
-      }
-    }
-    return {cum: bestCum, dist: bestD};
+  for (let i = 0; i < path.length; i++) {
+    const d = haversine(lat, lng, path[i].lat, path[i].lng);
+    if (d < nearestD) { nearestD = d; nearestIdx = i; }
   }
 
-  return {cum: pathCum[bestIdx], dist: bestD};
+  // Clearly off route — return nearest point for "X m dari jalur" display
+  if (nearestD > OFF_ROUTE_THRESHOLD_M) {
+    return { cum: pathCum[nearestIdx], dist: nearestD };
+  }
+
+  // On route: among all candidates within threshold, pick the one that best
+  // represents forward progress from farthestCum.
+  // Score: prefer cum slightly ahead of farthestCum; penalize going backward 3×.
+  let bestCum = pathCum[nearestIdx];
+  let bestScore = Infinity;
+
+  for (let i = 0; i < path.length; i++) {
+    const d = haversine(lat, lng, path[i].lat, path[i].lng);
+    if (d <= OFF_ROUTE_THRESHOLD_M) {
+      const cum = pathCum[i];
+      const delta = cum - farthestCum;
+      // Going forward (delta>=0): score = delta (small forward = best)
+      // Going backward (delta<0): score = |delta| * 3 (heavily penalized)
+      const score = delta >= 0 ? delta : (-delta) * 3;
+      if (score < bestScore) {
+        bestScore = score;
+        bestCum = cum;
+      }
+    }
+  }
+
+  return { cum: bestCum, dist: nearestD };
 }
 
-let userMarker=null, userAccuracy=null, watchId=null, tracking=false, autoFollow=true;
-let meIcon = null;
+// ─── Status Update ────────────────────────────────────────────────────────────
+function updateStatus(lat, lng) {
+  if (!path.length || !checkpoints.length) return;
 
-function updateStatus(lat,lng){
-  if(!path.length || !checkpoints.length) return;
-  const {cum: rawCum, dist: offRouteDist} = nearestPathInfo(lat,lng, farthestCum);
+  // Throttle heavy computation — marker position still updates every fix
+  const now = Date.now();
+  if (now - lastStatusTime < STATUS_THROTTLE_MS) return;
+  lastStatusTime = now;
+
+  const { cum: rawCum, dist: offRouteDist } = nearestPathInfo(lat, lng);
   const onRoute = offRouteDist <= OFF_ROUTE_THRESHOLD_M;
 
-  if (currentCheckpointIdx < checkpoints.length) {
+  // ── Sequential checkpoint enforcement ──────────────────────────────────────
+  // BUGFIX vs original: checkpoint advance now requires onRoute=true.
+  // This prevents "skipping" a checkpoint by walking near it off-route.
+  // Also enforces order: currentCheckpointIdx only increments by 1 per visit,
+  // so POS 2 cannot be reached before POS 1, POS 5 before POS 4, etc.
+  // Finish (idx=6) cannot be reached before POS 5 (idx=5) is visited.
+  if (onRoute && currentCheckpointIdx < checkpoints.length) {
     const cp = checkpoints[currentCheckpointIdx];
     const distToCp = haversine(lat, lng, cp.lat, cp.lng);
-    if (distToCp <= OFF_ROUTE_THRESHOLD_M) {
+    if (distToCp <= CHECKPOINT_REACH_M) {
       currentCheckpointIdx++;
     }
   }
 
-  if(onRoute){
-    let maxAllowed = totalPathDist;
+  // ── Update farthest progress ────────────────────────────────────────────────
+  // Cap: cannot progress past the next checkpoint's position until physically there.
+  // Also cap per-update advance to prevent GPS jumps inflating progress.
+  if (onRoute) {
+    let cap = totalPathDist;
     if (currentCheckpointIdx < checkpoints.length) {
-      maxAllowed = checkpointCum[currentCheckpointIdx];
+      // Allow progress up to the next checkpoint's path position + a small buffer
+      cap = checkpointCum[currentCheckpointIdx] + CHECKPOINT_REACH_M;
     }
-    const cappedRawCum = Math.min(rawCum, maxAllowed);
-    const cappedCum = Math.min(cappedRawCum, farthestCum + MAX_STEP_ADVANCE_M);
-    farthestCum = Math.max(farthestCum, cappedCum);
+    const advanced = Math.min(rawCum, cap, farthestCum + MAX_STEP_ADVANCE_M);
+    farthestCum = Math.max(farthestCum, advanced);
   }
 
-  const userCum = farthestCum;
+  // ── Determine finish ────────────────────────────────────────────────────────
+  // finished = true only after ALL checkpoints visited (including POS 5 at idx=5
+  // AND Finish at idx=6), bringing currentCheckpointIdx to 7 (= checkpoints.length).
+  const finished = currentCheckpointIdx >= checkpoints.length;
+  const nextIdx  = finished ? -1 : currentCheckpointIdx;
+  const next     = finished ? checkpoints[checkpoints.length - 1] : checkpoints[nextIdx];
 
-  let nextIdx = currentCheckpointIdx < checkpoints.length ? currentCheckpointIdx : -1;
-  const finished = nextIdx === -1;
-  const next = finished ? checkpoints[checkpoints.length-1] : checkpoints[nextIdx];
-  const dToNext = finished ? 0 : Math.max(haversine(lat, lng, next.lat, next.lng), checkpointCum[nextIdx] - userCum);
+  const dToNext = finished
+    ? 0
+    : Math.max(
+        haversine(lat, lng, next.lat, next.lng),
+        nextIdx >= 0 ? Math.max(0, checkpointCum[nextIdx] - farthestCum) : 0
+      );
 
+  // ── Update UI ───────────────────────────────────────────────────────────────
   const statusIcon = document.getElementById('statusIcon');
-  const statusTo = document.getElementById('statusTo');
+  const statusTo   = document.getElementById('statusTo');
+  const statusName = document.getElementById('statusName');
   const statusDist = document.getElementById('statusDist');
 
-  if(statusIcon) statusIcon.classList.toggle('off-route', !onRoute);
-  if(statusDist) statusDist.classList.toggle('off-route', !onRoute);
+  if (statusIcon) statusIcon.classList.toggle('off-route', !onRoute);
+  if (statusDist) statusDist.classList.toggle('off-route', !onRoute);
 
-  if(!onRoute){
-    statusTo.textContent = 'Anda di luar jalur rute';
-    document.getElementById('statusName').textContent = next.name;
-    statusDist.textContent = (offRouteDist<1000 ? Math.round(offRouteDist)+' m dari jalur' : (offRouteDist/1000).toFixed(1)+' km dari jalur');
+  if (!onRoute) {
+    statusTo.textContent   = 'Anda di luar jalur rute';
+    statusName.textContent = next ? next.name : '–';
+    statusDist.textContent = offRouteDist < 1000
+      ? Math.round(offRouteDist) + ' m dari jalur'
+      : (offRouteDist / 1000).toFixed(1) + ' km dari jalur';
+  } else if (finished) {
+    statusTo.textContent   = 'Selamat! 🎉';
+    statusName.textContent = 'Anda sudah di garis finish!';
+    statusDist.textContent = '🏁';
   } else {
-    statusTo.textContent = finished ? 'Selamat!' : 'Menuju checkpoint berikutnya';
-    document.getElementById('statusName').textContent = finished ? 'Anda sudah di garis finish' : next.name;
-    statusDist.textContent = finished ? '🎉' : (dToNext<1000 ? Math.round(dToNext)+' m' : (dToNext/1000).toFixed(1)+' km');
+    statusTo.textContent   = 'Menuju checkpoint berikutnya';
+    statusName.textContent = next.name;
+    statusDist.textContent = dToNext < 1000
+      ? Math.round(dToNext) + ' m'
+      : (dToNext / 1000).toFixed(1) + ' km';
   }
-  document.getElementById('progressFill').style.width = Math.min(100, totalPathDist ? (userCum/totalPathDist*100) : 0)+'%';
+
+  const pct = totalPathDist ? Math.min(100, (farthestCum / totalPathDist) * 100) : 0;
+  document.getElementById('progressFill').style.width = pct + '%';
 }
 
-function startTracking(){
-  if(!navigator.geolocation){ showToast('Perangkat tidak mendukung GPS'); return; }
-  if(!path.length || !checkpoints.length){ showToast('Rute belum selesai dimuat, coba lagi sesaat lagi'); return; }
-  watchId = navigator.geolocation.watchPosition(pos=>{
-    const {latitude, longitude, accuracy} = pos.coords;
-    if(!userMarker){
-      userMarker = L.marker([latitude,longitude], {icon:meIcon, zIndexOffset:1000}).addTo(map);
-      userAccuracy = L.circle([latitude,longitude], {radius:accuracy, color:'#1f7ae0', fillColor:'#1f7ae0', fillOpacity:.12, weight:1}).addTo(map);
+// ─── GPS Tracking ─────────────────────────────────────────────────────────────
+function startTracking() {
+  if (!navigator.geolocation) { showToast('Perangkat tidak mendukung GPS'); return; }
+  if (!path.length || !checkpoints.length) { showToast('Rute belum selesai dimuat, coba lagi sesaat lagi'); return; }
+
+  watchId = navigator.geolocation.watchPosition(pos => {
+    const { latitude, longitude, accuracy } = pos.coords;
+
+    // Update marker position immediately on every fix (smooth blue dot)
+    if (!userMarker) {
+      userMarker = L.marker([latitude, longitude], { icon: meIcon, zIndexOffset: 1000 }).addTo(map);
+      userAccuracy = L.circle([latitude, longitude], {
+        radius: accuracy, color: '#1f7ae0', fillColor: '#1f7ae0',
+        fillOpacity: .12, weight: 1
+      }).addTo(map);
     } else {
-      userMarker.setLatLng([latitude,longitude]);
-      userAccuracy.setLatLng([latitude,longitude]);
+      userMarker.setLatLng([latitude, longitude]);
+      userAccuracy.setLatLng([latitude, longitude]);
       userAccuracy.setRadius(accuracy);
     }
-    if(autoFollow) map.panTo([latitude,longitude]);
-    updateStatus(latitude,longitude);
-  }, err=>{
-    showToast(err.code===1 ? 'Izin lokasi ditolak' : 'Gagal mengambil lokasi');
-  }, {enableHighAccuracy:true, maximumAge:1500, timeout:12000});
+    if (autoFollow) map.panTo([latitude, longitude]);
+
+    // Status computation is throttled internally
+    updateStatus(latitude, longitude);
+  }, err => {
+    showToast(err.code === 1 ? 'Izin lokasi ditolak' : 'Gagal mengambil lokasi');
+  }, { enableHighAccuracy: true, maximumAge: 2000, timeout: 15000 });
 
   tracking = true;
   document.getElementById('trackBtn').classList.add('active');
@@ -378,9 +456,9 @@ function startTracking(){
   document.getElementById('liveBadgeText').textContent = 'Lokasi aktif';
 }
 
-function stopTracking(){
-  if(watchId!==null){ navigator.geolocation.clearWatch(watchId); watchId=null; }
-  tracking=false;
+function stopTracking() {
+  if (watchId !== null) { navigator.geolocation.clearWatch(watchId); watchId = null; }
+  tracking = false;
   document.getElementById('trackBtn').classList.remove('active');
   document.getElementById('trackIcon').innerHTML = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21s7-7.58 7-12A7 7 0 0 0 5 9c0 4.42 7 12 7 12z"/><circle cx="12" cy="9" r="2.4"/></svg>';
   document.getElementById('trackLabel').textContent = 'Lacak Lokasi';
@@ -388,75 +466,101 @@ function stopTracking(){
   document.getElementById('liveBadgeText').textContent = 'Lokasi nonaktif';
 }
 
-function showToast(msg){
-  const t=document.getElementById('toast');
-  t.textContent=msg; t.classList.add('show');
-  setTimeout(()=>t.classList.remove('show'), 2600);
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 2600);
 }
 
-function initMap(){
-  meIcon = L.divIcon({html:'<div class="me-pin"></div>', className:'', iconSize:[18,18], iconAnchor:[9,9]});
+// ─── Map Initialization ───────────────────────────────────────────────────────
+function initMap() {
+  meIcon = L.divIcon({ html: '<div class="me-pin"></div>', className: '', iconSize: [18, 18], iconAnchor: [9, 9] });
 
-  map = L.map('map', {zoomControl:false, attributionControl:true}).setView([checkpoints[0].lat, checkpoints[0].lng], 16);
+  // PERF: Use Canvas renderer instead of SVG — significantly lighter on mobile
+  // SVG repaints the entire scene for every frame; Canvas only redraws what changed.
+  canvasRenderer = L.canvas({ padding: 0.5 });
+
+  map = L.map('map', {
+    zoomControl: false,
+    attributionControl: true,
+    preferCanvas: true,
+    renderer: canvasRenderer
+  }).setView([checkpoints[0].lat, checkpoints[0].lng], 16);
+
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-    maxZoom:19, attribution:'&copy; OpenStreetMap contributors'
+    maxZoom: 19,
+    attribution: '&copy; OpenStreetMap contributors',
+    updateWhenZooming: false, // Don't re-fetch tiles during pinch-zoom
+    updateWhenIdle: true,
+    keepBuffer: 2
   }).addTo(map);
-  L.control.zoom({position:'topleft'}).addTo(map);
 
-  const latlngs = path.map(p=>[p.lat,p.lng]);
-  const basePoly = L.polyline(latlngs, {color:'#114084', weight:5, opacity:.95, lineJoin:'round'}).addTo(map);
-  map.fitBounds(basePoly.getBounds(), {padding:[40,40]});
+  L.control.zoom({ position: 'topleft' }).addTo(map);
 
-  // Inject animasi flow sekali saja
-  if(!document.getElementById('flow-style')){
-    const style=document.createElement('style');
-    style.id='flow-style';
-    style.textContent = '.flow-line{animation:dashmove 1s linear infinite;} @keyframes dashmove{to{stroke-dashoffset:-30;}}';
-    document.head.appendChild(style);
-  }
+  const latlngs = path.map(p => [p.lat, p.lng]);
 
-  const directionPoly = L.polyline(latlngs, {color:'#FF6B00', weight:5, opacity:.95, lineJoin:'round'}).addTo(map);
-  setTimeout(()=>{
-    const el = directionPoly.getElement();
-    if(el){
-      el.style.strokeDasharray = '1 14';
-      el.style.strokeLinecap='round';
-      el.classList.add('flow-line');
-    }
-  },300);
+  // Base route line (navy blue, solid)
+  const basePoly = L.polyline(latlngs, {
+    color: '#114084', weight: 5, opacity: 0.95,
+    lineJoin: 'round', renderer: canvasRenderer
+  }).addTo(map);
 
-  checkpoints.forEach((p,i)=>{
+  map.fitBounds(basePoly.getBounds(), { padding: [40, 40] });
+
+  // PERF FIX: Direction indicator as static dashed orange line.
+  // The original used a continuous CSS keyframe animation (dashmove / stroke-dashoffset)
+  // on an SVG polyline — this forces GPU repaint every frame and is the #1 cause
+  // of lag on mobile. Replaced with a static dashed pattern; same visual effect, zero cost.
+  L.polyline(latlngs, {
+    color: '#FF6B00', weight: 4, opacity: 0.85,
+    dashArray: '1 12', lineCap: 'round', lineJoin: 'round',
+    renderer: canvasRenderer
+  }).addTo(map);
+
+  // Checkpoint markers
+  checkpoints.forEach((p, i) => {
     const isEdge = p.flag;
-    const html = isEdge ? `<div class="flag-pin">${FLAG_PIN_SVG}</div>` : `<div class="num-pin">${i}</div>`;
-    const icon = L.divIcon({html, className:'', iconSize:isEdge?[30,30]:[26,26], iconAnchor:isEdge?[15,15]:[13,13]});
-    L.marker([p.lat,p.lng], {icon}).addTo(map).bindPopup(`<b>${p.name}</b>`);
+    const html = isEdge
+      ? `<div class="flag-pin">${FLAG_PIN_SVG}</div>`
+      : `<div class="num-pin">${i}</div>`;
+    const icon = L.divIcon({
+      html, className: '',
+      iconSize: isEdge ? [30, 30] : [26, 26],
+      iconAnchor: isEdge ? [15, 15] : [13, 13]
+    });
+    L.marker([p.lat, p.lng], { icon }).addTo(map).bindPopup(`<b>${p.name}</b>`);
   });
 
-  document.getElementById('metaDistance').textContent = (totalPathDist/1000).toFixed(1)+' km';
+  // Info modal content
+  document.getElementById('metaDistance').textContent = (totalPathDist / 1000).toFixed(1) + ' km';
   const listEl = document.getElementById('routeList');
-  checkpoints.forEach((p,i)=>{
+  checkpoints.forEach((p, i) => {
     const li = document.createElement('li');
-    li.innerHTML = `<span class="num ${p.flag?'flag':''}">${p.flag?FLAG_LIST_SVG:i}</span><span>${p.name}</span>`;
+    li.innerHTML = `<span class="num ${p.flag ? 'flag' : ''}">${p.flag ? FLAG_LIST_SVG : i}</span><span>${p.name}</span>`;
     listEl.appendChild(li);
   });
 
-  document.getElementById('recenterBtn').addEventListener('click', ()=>{
+  document.getElementById('recenterBtn').addEventListener('click', () => {
     autoFollow = true;
-    if(userMarker) map.panTo(userMarker.getLatLng());
+    if (userMarker) map.panTo(userMarker.getLatLng());
     else showToast('Aktifkan lokasi dulu');
   });
 
-  map.on('dragstart', ()=>{ autoFollow=false; });
+  map.on('dragstart', () => { autoFollow = false; });
 }
 
-async function loadRoute(){
-  try{
-    const res = await fetch('route.json', {cache: 'no-store'});
-    if(!res.ok) throw new Error('HTTP '+res.status);
+// ─── Route Loading ────────────────────────────────────────────────────────────
+async function loadRoute() {
+  try {
+    // PERF FIX: removed cache:'no-store' — allow browser to cache route.json
+    // so it loads instantly on repeat visits instead of hitting the network each time.
+    const res = await fetch('route.json');
+    if (!res.ok) throw new Error('HTTP ' + res.status);
     const data = await res.json();
     checkpoints = data.checkpoints || [];
     path = data.path || [];
-  }catch(err){
+  } catch (err) {
     console.error('Gagal memuat route.json', err);
     showToast('Gagal memuat data rute');
     return;
@@ -465,47 +569,50 @@ async function loadRoute(){
   initMap();
 }
 
-document.getElementById('trackBtn').addEventListener('click', ()=>{ tracking ? stopTracking() : startTracking(); });
+// ─── Event Listeners ──────────────────────────────────────────────────────────
+document.getElementById('trackBtn').addEventListener('click', () => {
+  tracking ? stopTracking() : startTracking();
+});
 
-document.getElementById('infoBtn').addEventListener('click', ()=> document.getElementById('infoModal').classList.add('show'));
-document.getElementById('closeInfo').addEventListener('click', ()=> document.getElementById('infoModal').classList.remove('show'));
+document.getElementById('infoBtn').addEventListener('click', () =>
+  document.getElementById('infoModal').classList.add('show'));
+document.getElementById('closeInfo').addEventListener('click', () =>
+  document.getElementById('infoModal').classList.remove('show'));
 
 const shareModal = document.getElementById('shareModal');
-document.getElementById('shareBtn').addEventListener('click', ()=>{
+document.getElementById('shareBtn').addEventListener('click', () => {
   shareModal.classList.add('show');
   document.getElementById('urlBox').textContent = window.location.href;
   const qrHolder = document.getElementById('qrcode');
-  qrHolder.innerHTML='';
-  
+  qrHolder.innerHTML = '';
+
   const qrSize = 512;
-  new QRCode(qrHolder, {text:window.location.href, width:qrSize, height:qrSize, colorDark:'#114084', colorLight:'#ffffff', correctLevel:QRCode.CorrectLevel.H});
-  
+  new QRCode(qrHolder, {
+    text: window.location.href, width: qrSize, height: qrSize,
+    colorDark: '#114084', colorLight: '#ffffff', correctLevel: QRCode.CorrectLevel.H
+  });
+
   setTimeout(() => {
     const canvas = document.querySelector('#qrcode canvas') || qrHolder.querySelector('canvas');
     if (canvas) {
       canvas.style.width = '168px';
       canvas.style.height = '168px';
-      
+
       const ctx = canvas.getContext('2d');
       const img = new Image();
       img.src = 'foto/qr.png';
       img.onload = () => {
-        // Gambar background putih bulat untuk logo
+        // Draw white circular background for logo
         const bgSize = 220;
-        const centerX = qrSize / 2;
-        const centerY = qrSize / 2;
         ctx.beginPath();
-        ctx.arc(centerX, centerY, bgSize / 2, 0, 2 * Math.PI, false);
+        ctx.arc(qrSize / 2, qrSize / 2, bgSize / 2, 0, 2 * Math.PI, false);
         ctx.fillStyle = '#ffffff';
         ctx.fill();
-        
-        // Gambar logo di atasnya
-        const imgSize = 220;
-        const imgX = (qrSize - imgSize) / 2;
-        const imgY = (qrSize - imgSize) / 2;
-        ctx.drawImage(img, imgX, imgY, imgSize, imgSize);
-        
-        // Perbarui img tag yang digenerate qrcode.js
+
+        // Draw logo on top
+        ctx.drawImage(img, (qrSize - bgSize) / 2, (qrSize - bgSize) / 2, bgSize, bgSize);
+
+        // Sync to img tag generated by qrcode.js
         const qrImg = document.querySelector('#qrcode img');
         if (qrImg) {
           qrImg.src = canvas.toDataURL('image/png');
@@ -514,13 +621,15 @@ document.getElementById('shareBtn').addEventListener('click', ()=>{
         }
       };
     }
-  }, 50);
+  }, 100);
 });
-document.getElementById('closeShare').addEventListener('click', ()=> shareModal.classList.remove('show'));
 
-document.getElementById('downloadBtn').addEventListener('click', ()=>{
+document.getElementById('closeShare').addEventListener('click', () =>
+  shareModal.classList.remove('show'));
+
+document.getElementById('downloadBtn').addEventListener('click', () => {
   const canvas = document.querySelector('#qrcode canvas');
-  if(!canvas){ showToast('QR belum siap, coba lagi.'); return; }
+  if (!canvas) { showToast('QR belum siap, coba lagi.'); return; }
   const link = document.createElement('a');
   link.download = 'qr-jalan-santai-unud.png';
   link.href = canvas.toDataURL('image/png');
@@ -531,19 +640,20 @@ document.getElementById('downloadBtn').addEventListener('click', ()=>{
   const orig = btn.textContent;
   btn.textContent = 'Terunduh!';
   btn.classList.add('done');
-  setTimeout(()=>{ btn.textContent = orig; btn.classList.remove('done'); }, 1600);
+  setTimeout(() => { btn.textContent = orig; btn.classList.remove('done'); }, 1600);
 });
 
-document.getElementById('copyBtn').addEventListener('click', ()=>{
-  navigator.clipboard.writeText(window.location.href).then(()=>{
-    const btn=document.getElementById('copyBtn');
-    btn.textContent='Tersalin!'; btn.classList.add('copied');
-    setTimeout(()=>{btn.textContent='Salin Link'; btn.classList.remove('copied');},1600);
+document.getElementById('copyBtn').addEventListener('click', () => {
+  navigator.clipboard.writeText(window.location.href).then(() => {
+    const btn = document.getElementById('copyBtn');
+    btn.textContent = 'Tersalin!';
+    btn.classList.add('copied');
+    setTimeout(() => { btn.textContent = 'Salin Link'; btn.classList.remove('copied'); }, 1600);
   });
 });
 
-document.querySelectorAll('.modal-back').forEach(m=>{
-  m.addEventListener('click', e=>{ if(e.target===m) m.classList.remove('show'); });
+document.querySelectorAll('.modal-back').forEach(m => {
+  m.addEventListener('click', e => { if (e.target === m) m.classList.remove('show'); });
 });
 
 loadRoute();
