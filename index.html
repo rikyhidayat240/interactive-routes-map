@@ -154,9 +154,41 @@
   .toast.show{opacity:1;}
 
   /* BUGFIX: was --shadow-color (undefined), corrected to --shadow-rgb */
-  .num-pin{width:26px;height:26px;border-radius:50%;background:var(--navy);border:2px solid #fff;box-shadow:0 2px 6px rgba(var(--shadow-rgb),.35);color:#fff;font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center;}
-  .flag-pin{width:30px;height:30px;border-radius:50%;background:var(--orange);border:2px solid #fff;box-shadow:0 2px 6px rgba(var(--shadow-rgb),.35);display:flex;align-items:center;justify-content:center;}
-  .me-pin{width:18px;height:18px;border-radius:50%;background:#1f7ae0;border:3px solid #fff;box-shadow:0 0 0 4px rgba(31,122,224,.3);}
+  .num-pin{
+    width:26px;height:26px;border-radius:50%;background:var(--navy);border:2px solid #fff;
+    box-shadow:0 2px 8px rgba(var(--shadow-rgb),.4);color:#fff;font-size:11px;font-weight:700;
+    display:flex;align-items:center;justify-content:center;
+    animation:pin-pulse 2.8s ease-in-out infinite;
+  }
+  .flag-pin{
+    width:30px;height:30px;border-radius:50%;background:var(--orange);border:2px solid #fff;
+    box-shadow:0 2px 8px rgba(var(--shadow-rgb),.4);display:flex;align-items:center;justify-content:center;
+    animation:flag-pulse 2s ease-in-out infinite;
+  }
+  /* Checkpoint markers: subtle scale pulse so they feel alive */
+  @keyframes pin-pulse{
+    0%,100%{transform:scale(1);box-shadow:0 2px 8px rgba(var(--shadow-rgb),.4);}
+    50%{transform:scale(1.12);box-shadow:0 4px 14px rgba(var(--shadow-rgb),.55);}
+  }
+  @keyframes flag-pulse{
+    0%,100%{transform:scale(1);box-shadow:0 2px 8px rgba(255,107,0,.4);}
+    50%{transform:scale(1.14);box-shadow:0 4px 16px rgba(255,107,0,.65);}
+  }
+  /* User location dot: ripple ring */
+  .me-pin{
+    width:18px;height:18px;border-radius:50%;background:#1f7ae0;border:3px solid #fff;
+    box-shadow:0 0 0 0 rgba(31,122,224,.45);
+    animation:me-ripple 1.8s ease-out infinite;
+  }
+  @keyframes me-ripple{
+    0%{box-shadow:0 0 0 0 rgba(31,122,224,.5);}
+    70%{box-shadow:0 0 0 10px rgba(31,122,224,0);}
+    100%{box-shadow:0 0 0 0 rgba(31,122,224,0);}
+  }
+  /* Animated direction dots (SVG path element) */
+  @keyframes dashmove{
+    to{stroke-dashoffset:-13;}
+  }
 
   .leaflet-control-attribution{font-size:9px !important;}
   .leaflet-bottom.leaflet-right{margin-bottom:190px;}
@@ -508,15 +540,29 @@ function initMap() {
 
   map.fitBounds(basePoly.getBounds(), { padding: [40, 40] });
 
-  // PERF FIX: Direction indicator as static dashed orange line.
-  // The original used a continuous CSS keyframe animation (dashmove / stroke-dashoffset)
-  // on an SVG polyline — this forces GPU repaint every frame and is the #1 cause
-  // of lag on mobile. Replaced with a static dashed pattern; same visual effect, zero cost.
-  L.polyline(latlngs, {
-    color: '#FF6B00', weight: 4, opacity: 0.85,
+  // Direction dots: animated dashed orange line on a SEPARATE thin SVG renderer.
+  // Strategy: Canvas handles the heavy solid base line; a dedicated SVG renderer
+  // handles only this thin animated line. SVG is needed for CSS animation.
+  // will-change:stroke-dashoffset tells the GPU to composite this on its own layer,
+  // so the animation runs off the main thread — no jank on mobile.
+  // Thinner weight (3 vs original 5) + slower interval (1.4s) further reduces cost.
+  const svgRenderer = L.svg({ padding: 0.5 });
+  const animatedLine = L.polyline(latlngs, {
+    color: '#FF6B00', weight: 3, opacity: 0.9,
     dashArray: '1 12', lineCap: 'round', lineJoin: 'round',
-    renderer: canvasRenderer
+    renderer: svgRenderer
   }).addTo(map);
+
+  // Apply animation after the SVG element exists in the DOM
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      const el = animatedLine.getElement();
+      if (el) {
+        el.style.willChange = 'stroke-dashoffset';
+        el.style.animation = 'dashmove 1.4s linear infinite';
+      }
+    });
+  });
 
   // Checkpoint markers
   checkpoints.forEach((p, i) => {
