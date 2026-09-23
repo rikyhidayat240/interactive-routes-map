@@ -1,4 +1,4 @@
-﻿// ─── SVG Constants ────────────────────────────────────────────────────────────
+// ─── SVG Constants ────────────────────────────────────────────────────────────
 const FLAG_PIN_SVG  = '<svg width="16" height="16" viewBox="0 0 24 24"><line x1="6" y1="3" x2="6" y2="21" stroke="#fff" stroke-width="2.2" stroke-linecap="round"/><path d="M6 4.5 L18 4.5 L15 8 L18 11.5 L6 11.5 Z" fill="#fff"/><rect x="8" y="5.3" width="2" height="2" fill="#114084"/><rect x="12.2" y="5.3" width="2" height="2" fill="#114084"/><rect x="10.1" y="7.6" width="2" height="2" fill="#114084"/><rect x="14.3" y="9" width="2" height="1.6" fill="#114084"/></svg>';
 const FLAG_LIST_SVG = '<svg width="11" height="11" viewBox="0 0 24 24"><line x1="6" y1="3" x2="6" y2="21" stroke="#fff" stroke-width="2.6" stroke-linecap="round"/><path d="M6 4.5 L18 4.5 L15 8 L18 11.5 L6 11.5 Z" fill="#fff"/></svg>';
 
@@ -194,7 +194,8 @@ function showToast(msg) {
   const t = document.getElementById('toast');
   t.textContent = msg;
   t.classList.add('show');
-  setTimeout(() => t.classList.remove('show'), 2600);
+  clearTimeout(t._timer); // cegah timer lama memotong toast baru
+  t._timer = setTimeout(() => t.classList.remove('show'), 2600);
 }
 
 // ─── Map Initialization ───────────────────────────────────────────────────────
